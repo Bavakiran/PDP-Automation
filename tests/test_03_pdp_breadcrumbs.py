@@ -3,7 +3,7 @@ Suite 03: PDP Breadcrumbs
 """
 import sys
 from pathlib import Path
-from playwright.sync_api import Page
+from playwright.sync_api import Page, Locator
 
 try:
     from utils.helpers import DIRECT_PDP_URL, SEL, TestResult, click_and_capture_page, land_on_pdp_direct
@@ -12,7 +12,41 @@ except ModuleNotFoundError:
     from indiamart_pdp.utils.helpers import DIRECT_PDP_URL, SEL, TestResult, click_and_capture_page, land_on_pdp_direct
 
 
-def _open_breadcrumb(page: Page, link):
+# ---------------------------------------------------------------------------
+# Helper: red outline + console log before every click
+# ---------------------------------------------------------------------------
+def _highlight_and_log(page: Page, locator: Locator, label: str):
+    try:
+        locator.scroll_into_view_if_needed()
+        page.wait_for_timeout(300)
+        el = locator.element_handle()
+        tag  = page.evaluate("el => el.tagName", el)
+        text = page.evaluate(
+            "el => el.innerText || el.getAttribute('alt') || el.getAttribute('aria-label') || ''", el
+        )
+        href = page.evaluate("el => el.getAttribute('href') || ''", el)
+        print(f"  [CLICK] [{label}] <{tag.lower()}> '{text[:60].strip()}' → {href[:80]}")
+        page.evaluate(
+            """el => {
+                el.style.outline = '3px solid red';
+                el.style.outlineOffset = '2px';
+                setTimeout(() => {
+                    el.style.outline = '';
+                    el.style.outlineOffset = '';
+                }, 1500);
+            }""",
+            el
+        )
+        page.wait_for_timeout(800)
+    except Exception as e:
+        print(f"  [CLICK] [{label}] (highlight failed: {e})")
+
+
+# ---------------------------------------------------------------------------
+# Breadcrumb helpers
+# ---------------------------------------------------------------------------
+def _open_breadcrumb(page: Page, link: Locator, label: str):
+    _highlight_and_log(page, link, label)
     href = link.get_attribute("href") or ""
     try:
         return click_and_capture_page(page, link)
@@ -64,18 +98,23 @@ def _breadcrumb_links(page: Page):
     return candidates, breadcrumb_indexes
 
 
+# ---------------------------------------------------------------------------
+# Suite runner
+# ---------------------------------------------------------------------------
 def run(page: Page) -> TestResult:
     tr = TestResult(page)
     print("\n[Suite 03] PDP Breadcrumbs")
 
+    # ── TC-5628 ──────────────────────────────────────────────────────────────
     land_on_pdp_direct(page, DIRECT_PDP_URL)
-
     try:
         links, indexes = _breadcrumb_links(page)
-        target = _open_breadcrumb(page, links.nth(indexes[0]))
+        target = _open_breadcrumb(page, links.nth(indexes[0]), "TC-5628 breadcrumb-1")
         tr.set_page(target)
-        assert "dir.indiamart.com" in target.url or "search.mp" in target.url, f"Unexpected URL: {target.url}"
-        tr.add("TC-5628", "First breadcrumb redirects to dir.indiamart.com", "PASS", target.url[-70:])
+        assert "dir.indiamart.com" in target.url or "search.mp" in target.url, \
+            f"Unexpected URL: {target.url}"
+        tr.add("TC-5628", "First breadcrumb redirects to dir.indiamart.com", "PASS",
+               target.url[-70:])
         if target != page:
             target.close()
     except LookupError as exc:
@@ -83,13 +122,16 @@ def run(page: Page) -> TestResult:
     except Exception as exc:
         tr.add("TC-5628", "First breadcrumb redirects to dir.indiamart.com", "FAIL", str(exc)[:120])
 
+    # ── TC-5629 ──────────────────────────────────────────────────────────────
     land_on_pdp_direct(page, DIRECT_PDP_URL)
     try:
         links, indexes = _breadcrumb_links(page)
-        target = _open_breadcrumb(page, links.nth(indexes[1]))
+        target = _open_breadcrumb(page, links.nth(indexes[1]), "TC-5629 breadcrumb-2")
         tr.set_page(target)
-        assert "dir.indiamart.com" in target.url or "search.mp" in target.url, f"Unexpected URL: {target.url}"
-        tr.add("TC-5629", "Second breadcrumb redirects to subcategory page", "PASS", target.url[-70:])
+        assert "dir.indiamart.com" in target.url or "search.mp" in target.url, \
+            f"Unexpected URL: {target.url}"
+        tr.add("TC-5629", "Second breadcrumb redirects to subcategory page", "PASS",
+               target.url[-70:])
         if target != page:
             target.close()
     except LookupError as exc:
@@ -97,13 +139,16 @@ def run(page: Page) -> TestResult:
     except Exception as exc:
         tr.add("TC-5629", "Second breadcrumb redirects to subcategory page", "FAIL", str(exc)[:120])
 
+    # ── TC-5630 ──────────────────────────────────────────────────────────────
     land_on_pdp_direct(page, DIRECT_PDP_URL)
     try:
         links, indexes = _breadcrumb_links(page)
-        target = _open_breadcrumb(page, links.nth(indexes[2]))
+        target = _open_breadcrumb(page, links.nth(indexes[2]), "TC-5630 breadcrumb-3")
         tr.set_page(target)
-        assert "dir.indiamart.com" in target.url or target.url.endswith(".html"), f"Unexpected URL: {target.url}"
-        tr.add("TC-5630", "Third breadcrumb redirects to MCAT page", "PASS", target.url[-70:])
+        assert "dir.indiamart.com" in target.url or target.url.endswith(".html"), \
+            f"Unexpected URL: {target.url}"
+        tr.add("TC-5630", "Third breadcrumb redirects to MCAT page", "PASS",
+               target.url[-70:])
         if target != page:
             target.close()
     except LookupError as exc:
