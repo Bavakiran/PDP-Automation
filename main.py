@@ -20,7 +20,7 @@ SUITES = {
     "similar": "test_04_find_similar_products",
     "categories": "test_05_find_related_categories",
     "company": "test_06_company_details",
-    "enquiry": "test_07_enquiry_form",
+    "chatBL": "test_07_chat_bl_form",
     "more_products": "test_08_more_products",
     "about": "test_09_about_the_company",
     "get_quotes": "test_10_get_quotes",

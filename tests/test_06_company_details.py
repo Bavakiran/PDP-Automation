@@ -90,6 +90,22 @@ def _click_and_expect_form_hl(page: Page, selectors: list, label: str):
             continue
     click_and_expect_form(page, selectors)
 
+# ---------------------------------------------------------------------------
+# Helper: dismiss "Unlock IndiaMART" popup via Skip link
+# ---------------------------------------------------------------------------
+def _dismiss_login_popup(page: Page):
+    try:
+        skip = page.locator(
+            "a#idfpclose, a.idfpclose, a.skptxt"
+        ).first
+        if skip.is_visible(timeout=3000):
+            print("  [POPUP] Login popup detected — clicking Skip")
+            skip.click(force=True)
+            page.wait_for_timeout(1000)
+    except Exception:
+        pass
+
+
 
 # ---------------------------------------------------------------------------
 # Suite runner
@@ -101,6 +117,7 @@ def run(page: Page) -> TestResult:
     # ── TC-5949 ──────────────────────────────────────────────────────────────
     # Company details section is displayed
     land_on_pdp_direct(page, DIRECT_PDP_URL)
+    _dismiss_login_popup(page)
     try:
         section = first_visible(page, [SEL["company_section"], SEL["company_link"]])
         text = section.inner_text()
@@ -113,6 +130,7 @@ def run(page: Page) -> TestResult:
     # ── TC-5950 ──────────────────────────────────────────────────────────────
     # Clicking Contact Supplier opens enquiry form
     land_on_pdp_direct(page, DIRECT_PDP_URL)
+    _dismiss_login_popup(page)
     try:
         _click_and_expect_form_hl(
             page, [SEL["contact_supplier"]], "TC-5950 contact_supplier"
@@ -124,6 +142,7 @@ def run(page: Page) -> TestResult:
     # ── TC-5951 ──────────────────────────────────────────────────────────────
     # GST number present and masked (e.g. 07*********1Z2)
     land_on_pdp_direct(page, DIRECT_PDP_URL)
+    _dismiss_login_popup(page)
     try:
         gst_loc = page.locator(
             "[class*='gst'], [id*='gst'], "
@@ -146,6 +165,7 @@ def run(page: Page) -> TestResult:
     # ── TC-5952 ──────────────────────────────────────────────────────────────
     # TrustSEAL / Mobile / Email badges present (if applicable)
     land_on_pdp_direct(page, DIRECT_PDP_URL)
+    _dismiss_login_popup(page)
     try:
         badges_found = []
 
@@ -191,6 +211,7 @@ def run(page: Page) -> TestResult:
     # Company info fields: Legal Status, GST Reg Date, Annual Turnover,
     # IndiaMART Member Since — dates must be in Mon YYYY format
     land_on_pdp_direct(page, DIRECT_PDP_URL)
+    _dismiss_login_popup(page)
     try:
         # Get full text of the company info section
         info_section = page.locator(
