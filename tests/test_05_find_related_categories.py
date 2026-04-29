@@ -1,67 +1,368 @@
 """
 Suite 05: Find Related Categories
+
+TC-5946  Land on PDP → scroll → check "Find related categories" heading is visible
+TC-5947  Click first related category (MCAT) → verify category search page opens
+TC-5948  If display_id ends with 2:
+            assert Get Quotes NOT visible (PASS)
+         Else:
+            assert Get Quotes visible → click → BL form opens
 """
+
 import sys
 from pathlib import Path
-from playwright.sync_api import Page
+from playwright.sync_api import Page, Locator
 
 try:
-    from utils.helpers import DIRECT_PDP_URL, TestResult, click_and_capture_page, click_and_expect_form, first_visible, land_on_pdp_direct
+    from utils.helpers import (
+        DIRECT_PDP_URL,
+        TestResult,
+        click_and_capture_page,
+        click_and_expect_form,
+        first_visible,
+        land_on_pdp_direct
+    )
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-    from indiamart_pdp.utils.helpers import DIRECT_PDP_URL, TestResult, click_and_capture_page, click_and_expect_form, first_visible, land_on_pdp_direct
+    from indiamart_pdp.utils.helpers import (
+        DIRECT_PDP_URL,
+        TestResult,
+        click_and_capture_page,
+        click_and_expect_form,
+        first_visible,
+        land_on_pdp_direct
+    )
 
 
-def _scroll_to_section(page: Page) -> None:
-    page.evaluate("window.scrollTo(0, document.body.scrollHeight * 0.65)")
-    page.wait_for_timeout(1500)
+# ---------------------------------------------------------------------------
+# Helper: red outline + console log before every click
+# ---------------------------------------------------------------------------
+def _highlight_and_log(page: Page, locator: Locator, label: str):
+    try:
+        locator.scroll_into_view_if_needed()
+        page.wait_for_timeout(500)
+
+        el = locator.element_handle()
+
+        tag = page.evaluate("el => el.tagName", el)
+        text = page.evaluate(
+            """el =>
+                el.innerText ||
+                el.getAttribute('alt') ||
+                el.getAttribute('aria-label') || ''
+            """,
+            el
+        )
+        href = page.evaluate(
+            "el => el.getAttribute('href') || ''",
+            el
+        )
+
+        print(
+            f"  [CLICK] [{label}] <{tag.lower()}> "
+            f"'{text[:60].strip()}'"
+            + (f" -> {href[:100]}" if href else "")
+        )
+
+        page.evaluate(
+            """el => {
+                el.style.outline='4px solid red';
+                el.style.outlineOffset='3px';
+                el.style.backgroundColor='rgba(255,0,0,0.15)';
+
+                setTimeout(()=>{
+                    el.style.outline='';
+                    el.style.outlineOffset='';
+                    el.style.backgroundColor='';
+                },2500);
+            }""",
+            el
+        )
+
+        page.wait_for_timeout(1500)
+
+    except Exception as e:
+        print(f"[CLICK] [{label}] highlight failed: {e}")
 
 
+def _click_and_capture_hl(page: Page, locator: Locator, label: str):
+    _highlight_and_log(page, locator, label)
+    return click_and_capture_page(page, locator)
+
+
+def _click_and_expect_form_hl(page: Page, selectors: list, label: str):
+    for sel in selectors:
+        try:
+            loc = page.locator(sel).first
+
+            if loc.is_visible(timeout=3000):
+                _highlight_and_log(page, loc, label)
+                break
+
+        except Exception:
+            continue
+
+    click_and_expect_form(page, selectors)
+
+
+# ---------------------------------------------------------------------------
+# FIX 1: Dismiss "Unlock IndiaMART" popup using exact id from HTML
+# Selector: a#idfpclose (id) / a.idfpclose (class) / a.skptxt (class)
+# ---------------------------------------------------------------------------
+def _dismiss_login_popup(page: Page):
+    try:
+        skip = page.locator(
+            "a#idfpclose, a.idfpclose, a.skptxt"
+        ).first
+
+        if skip.is_visible(timeout=3000):
+            print("  [POPUP] Login popup detected — clicking Skip")
+            skip.click(force=True)
+            page.wait_for_timeout(1000)
+
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Scroll helper
+# ---------------------------------------------------------------------------
+def _scroll_to_section(page: Page):
+
+    for pos in [0.35, 0.55, 0.75, 0.90, 1.0]:
+        page.evaluate(
+            f"window.scrollTo(0, document.body.scrollHeight * {pos})"
+        )
+        page.wait_for_timeout(1500)
+
+    page.evaluate(
+        "window.scrollTo(0, document.body.scrollHeight)"
+    )
+    page.wait_for_timeout(2500)
+
+    try:
+        section = page.locator("#fndrltd").first
+
+        if section.is_visible(timeout=5000):
+            section.scroll_into_view_if_needed()
+            page.wait_for_timeout(1500)
+            print("  [SCROLL] Find Related Categories section reached")
+
+    except Exception:
+        print("  [SCROLL] Section not detected after max scroll")
+
+
+def _get_display_id(url: str):
+    try:
+        segment = (
+            url.split("?")[0]
+            .rstrip("/")
+            .split("/")[-1]
+            .replace(".html", "")
+        )
+
+        return segment.split("-")[-1]
+
+    except Exception:
+        return ""
+
+
+# ---------------------------------------------------------------------------
+# Suite runner
+# ---------------------------------------------------------------------------
 def run(page: Page) -> TestResult:
+
     tr = TestResult(page)
+
     print("\n[Suite 05] Find Related Categories")
 
+
+    # ============================================================
+    # TC-5946
+    # ============================================================
     land_on_pdp_direct(page, DIRECT_PDP_URL)
+    _dismiss_login_popup(page)
     _scroll_to_section(page)
+    _dismiss_login_popup(page)
 
     try:
-        heading = first_visible(page, ["h2:has-text('Related')", "h2:has-text('Categorie')", "h3:has-text('Related')"])
-        links = page.locator("a[href*='dir.indiamart.com'], a[href*='search.mp'], a[href*='.html']")
-        assert heading.is_visible() and links.count() > 0
-        tr.add("TC-5946", "Related categories section displays category links", "PASS", f"{links.count()} links")
-    except Exception as exc:
-        tr.add("TC-5946", "Related categories section displays category links", "FAIL", str(exc)[:120])
+        heading = first_visible(page, [
+            "h2:has-text('Find related categories')",
+            "h2:has-text('Find Related Categories')",
+            "h2:has-text('related categories')",
+            "h3:has-text('Find related')"
+        ])
 
-    land_on_pdp_direct(page, DIRECT_PDP_URL)
-    _scroll_to_section(page)
-    try:
-        target = click_and_capture_page(page, first_visible(page, ["a[href*='dir.indiamart.com']", "a[href*='search.mp']", "a[href*='.html']"]))
-        tr.set_page(target)
-        assert "dir.indiamart.com" in target.url or "search.mp" in target.url, f"Unexpected URL: {target.url}"
-        tr.add("TC-5947", "Clicking category title redirects to MCAT/Search page", "PASS", target.url[-70:])
-        if target != page:
-            target.close()
-    except Exception as exc:
-        tr.add("TC-5947", "Clicking category title redirects to MCAT/Search page", "FAIL", str(exc)[:120])
+        assert heading.is_visible(timeout=5000), \
+            "Find related categories heading not visible"
 
-    land_on_pdp_direct(page, DIRECT_PDP_URL)
-    _scroll_to_section(page)
-    try:
-        click_and_expect_form(page, ["button:has-text('Get Quotes')", "a:has-text('Get Quotes')", "button:has-text('Get Best Price')", "a:has-text('Get Best Price')"])
-        tr.add("TC-5948", "Clicking Get Quotes opens BL form", "PASS")
+        print(
+            f"[CHECK] [TC-5946] "
+            f"{heading.inner_text().strip()[:60]}"
+        )
+
+        tr.add(
+            "TC-5946",
+            "Find related categories heading visible",
+            "PASS"
+        )
+
     except Exception as exc:
-        tr.add("TC-5948", "Clicking Get Quotes opens BL form", "FAIL", str(exc)[:120])
+        tr.add(
+            "TC-5946",
+            "Find related categories heading visible",
+            "FAIL",
+            str(exc)[:120]
+        )
+
+    # ============================================================
+    # TC-5947
+    # TC-5947: Category link opens in a NEW tab — capture with context.expect_page()
+    # ============================================================
+    land_on_pdp_direct(page, DIRECT_PDP_URL)
+    _dismiss_login_popup(page)
+    _scroll_to_section(page)
+    _dismiss_login_popup(page)
+
+    try:
+        link = page.locator("#mcat-strip li a").first
+
+        link.wait_for(state="visible", timeout=8000)
+        link.scroll_into_view_if_needed()
+        page.wait_for_timeout(1000)
+
+        _highlight_and_log(page, link, "TC-5947 first_mcat")
+
+        # Link opens in a new tab — capture with context.expect_page()
+        with page.context.expect_page() as new_pg:
+            link.click(force=True)
+
+        target = new_pg.value
+        target.wait_for_load_state("domcontentloaded", timeout=60000)
+        target.wait_for_timeout(2000)
+
+        # Dismiss popup if it appears on the new tab
+        _dismiss_login_popup(target)
+
+        final_url = target.url
+        print(f"  [INFO] Redirected to: {final_url}")
+
+        assert "impcat" in final_url or "dir.indiamart.com" in final_url, \
+            f"Expected MCAT URL, got: {final_url}"
+
+        tr.add(
+            "TC-5947",
+            "Click first related category redirects to MCAT page",
+            "PASS",
+            final_url[-100:]
+        )
+
+        target.close()
+
+    except Exception as exc:
+        tr.add(
+            "TC-5947",
+            "Click first related category redirects to MCAT page",
+            "FAIL",
+            str(exc)[:120]
+        )
+
+    # ============================================================
+    # TC-5948
+    # ============================================================
+    land_on_pdp_direct(page, DIRECT_PDP_URL)
+    _dismiss_login_popup(page)
+    _scroll_to_section(page)
+    _dismiss_login_popup(page)
+
+    try:
+        display_id = _get_display_id(page.url)
+
+        print(f"[INFO] [TC-5948] display_id={display_id}")
+
+        get_quotes = page.locator(
+            "button:has-text('Get Quotes'), "
+            "a:has-text('Get Quotes')"
+        ).first
+
+        # If ends with 2 -> Get Quotes should NOT be visible
+        if display_id.endswith("2"):
+
+            visible = False
+
+            try:
+                visible = get_quotes.is_visible(timeout=3000)
+            except Exception:
+                pass
+
+            assert not visible, \
+                "Get Quotes visible though display_id ends with 2"
+
+            tr.add(
+                "TC-5948",
+                "Get Quotes hidden for display ids ending with 2",
+                "PASS",
+                f"display_id={display_id}"
+            )
+
+        # Else should be visible and open BL form
+        else:
+
+            get_quotes.wait_for(state="visible", timeout=8000)
+
+            assert get_quotes.is_visible(), \
+                "Get Quotes not visible"
+
+            _click_and_expect_form_hl(
+                page,
+                [
+                    "button:has-text('Get Quotes')",
+                    "a:has-text('Get Quotes')"
+                ],
+                "TC-5948 get_quotes"
+            )
+
+            tr.add(
+                "TC-5948",
+                "Get Quotes opens BL form",
+                "PASS",
+                f"display_id={display_id}"
+            )
+
+    except Exception as exc:
+        tr.add(
+            "TC-5948",
+            "Get Quotes visibility / BL form behavior",
+            "FAIL",
+            str(exc)[:120]
+        )
 
     return tr
 
 
+# ---------------------------------------------------------------------------
+# Standalone run
+# ---------------------------------------------------------------------------
 if __name__ == "__main__":
+
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=False, slow_mo=200)
+
+        browser = pw.chromium.launch(
+            headless=False,
+            slow_mo=500
+        )
+
         page = browser.new_page()
+
         result = run(page)
+
         summary = result.summary()
-        print(f"\nSummary: {summary['passed']}/{summary['total']} passed")
+
+        print(
+            f"\nSummary: "
+            f"{summary['passed']}/{summary['total']} passed"
+        )
+
         browser.close()
