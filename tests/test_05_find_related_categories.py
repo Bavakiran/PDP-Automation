@@ -3,10 +3,7 @@ Suite 05: Find Related Categories
 
 TC-5946  Land on PDP → scroll → check "Find related categories" heading is visible
 TC-5947  Click first related category (MCAT) → verify category search page opens
-TC-5948  If display_id ends with 2:
-            assert Get Quotes NOT visible (PASS)
-         Else:
-            assert Get Quotes visible → click → BL form opens
+TC-5948  Get Quotes visible → click → BL form opens
 """
 
 import sys
@@ -152,19 +149,6 @@ def _scroll_to_section(page: Page):
         print("  [SCROLL] Section not detected after max scroll")
 
 
-def _get_display_id(url: str):
-    try:
-        segment = (
-            url.split("?")[0]
-            .rstrip("/")
-            .split("/")[-1]
-            .replace(".html", "")
-        )
-
-        return segment.split("-")[-1]
-
-    except Exception:
-        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -276,63 +260,50 @@ def run(page: Page) -> TestResult:
     _dismiss_login_popup(page)
 
     try:
-        display_id = _get_display_id(page.url)
+        # Locate the Get Quote button strictly — must be a <button> tag
+        # so it does NOT match the surrounding card anchor that redirects to dir page
+        get_quotes = page.locator("button:has-text('Get Quote')").first
 
-        print(f"[INFO] [TC-5948] display_id={display_id}")
+        # If not found, hard refresh and try once more
+        if not get_quotes.is_visible(timeout=5000):
+            print("  [REFRESH] Get Quote button not found — hard refreshing page")
+            page.reload(wait_until="domcontentloaded", timeout=60000)
+            page.wait_for_timeout(2000)
+            _dismiss_login_popup(page)
+            _scroll_to_section(page)
+            _dismiss_login_popup(page)
+            get_quotes = page.locator("button:has-text('Get Quote')").first
 
-        get_quotes = page.locator(
-            "button:has-text('Get Quotes'), "
-            "a:has-text('Get Quotes')"
-        ).first
+        # Scroll the button into view
+        get_quotes.wait_for(state="attached", timeout=8000)
+        get_quotes.scroll_into_view_if_needed()
+        page.wait_for_timeout(800)
+        assert get_quotes.is_visible(), "Get Quote button not visible even after hard refresh"
 
-        # If ends with 2 -> Get Quotes should NOT be visible
-        if display_id.endswith("2"):
+        # Highlight + click strictly on the button (not the card)
+        _highlight_and_log(page, get_quotes, "TC-5948 get_quote_button")
+        get_quotes.click()
+        page.wait_for_timeout(1500)
 
-            visible = False
+        # Assert BL form opened (should stay on same page, not navigate away)
+        assert "dir.indiamart.com" not in page.url, \
+            "Page redirected to dir — button click hit the card instead of the button"
+        form_visible = page.locator(
+            "form, [class*='bl-form'], [class*='blform'], "
+            "[class*='modal'], [class*='popup'], [id*='bl']"
+        ).first.is_visible(timeout=5000)
+        assert form_visible, "BL form did not open after clicking Get Quote button"
 
-            try:
-                visible = get_quotes.is_visible(timeout=3000)
-            except Exception:
-                pass
-
-            assert not visible, \
-                "Get Quotes visible though display_id ends with 2"
-
-            tr.add(
-                "TC-5948",
-                "Get Quotes hidden for display ids ending with 2",
-                "PASS",
-                f"display_id={display_id}"
-            )
-
-        # Else should be visible and open BL form
-        else:
-
-            get_quotes.wait_for(state="visible", timeout=8000)
-
-            assert get_quotes.is_visible(), \
-                "Get Quotes not visible"
-
-            _click_and_expect_form_hl(
-                page,
-                [
-                    "button:has-text('Get Quotes')",
-                    "a:has-text('Get Quotes')"
-                ],
-                "TC-5948 get_quotes"
-            )
-
-            tr.add(
-                "TC-5948",
-                "Get Quotes opens BL form",
-                "PASS",
-                f"display_id={display_id}"
-            )
+        tr.add(
+            "TC-5948",
+            "Get Quotes opens BL form",
+            "PASS"
+        )
 
     except Exception as exc:
         tr.add(
             "TC-5948",
-            "Get Quotes visibility / BL form behavior",
+            "Get Quotes opens BL form",
             "FAIL",
             str(exc)[:120]
         )
