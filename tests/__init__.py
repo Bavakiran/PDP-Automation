@@ -5,7 +5,7 @@ from . import (
     test_04_find_similar_products,
     test_05_find_related_categories,
     test_06_company_details,
-    test_07_enquiry_form,
+    test_07_chat_bl_form,
     test_08_more_products,
     test_09_about_the_company,
     test_10_get_quotes,
