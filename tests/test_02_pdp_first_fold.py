@@ -119,15 +119,30 @@ def run(page: Page) -> TestResult:
         tr.add("TC-5550", "Clicking Submit Requirement opens enquiry form", "FAIL", str(exc)[:120])
 
     # ── TC-5551 ──────────────────────────────────────────────────────────────
-    # Click company name: h2.fs15 — may open in same tab or new tab
+    # Click company name anchor tag — opens company page in new tab
+    # Actual HTML: <a class="color6 " target="_blank" href="...">Company Name</a>
     land_on_pdp_direct(page, DIRECT_PDP_URL)
     try:
-        company_locator = page.locator("h2.fs15").first
-        assert company_locator.is_visible(timeout=5000), "Company name element not visible"
-        target = _click_and_capture_hl(page, company_locator, "TC-5551 company_name h2.fs15")
+        COMPANY_SELECTORS = [
+            # Primary: anchor with color6 class (confirmed from DOM)
+            "a.color6[target='_blank'][href*='shashi']",
+            "a.color6[target='_blank']",
+            # Fallbacks in order of specificity
+            "h2.fs15 a",
+            "h2.fs15",
+            "span.fs15 a",
+            "a.fs15",
+            ".lcname a",
+            ".comp-name a",
+            "a[class*='color'][target='_blank'][href*='.co.in']",
+            "a[class*='color'][target='_blank'][href*='.com']",
+        ]
+        company_locator = first_visible(page, COMPANY_SELECTORS, timeout=8000)
+        assert company_locator is not None, "No company name element found with any known selector"
+        target = _click_and_capture_hl(page, company_locator, "TC-5551 company_name anchor")
         tr.set_page(target)
-        # Company page can be indiamart.com or external domain — must not be a PDP
-        assert "proddetail" not in target.url, f"Unexpected URL: {target.url}"
+        # Must NOT land back on a PDP page
+        assert "proddetail" not in target.url, f"Unexpected PDP URL: {target.url}"
         tr.add("TC-5551", "Clicking company name redirects to company page", "PASS",
                target.url[-70:])
         if target != page:
@@ -162,16 +177,28 @@ def run(page: Page) -> TestResult:
         tr.add("TC-5554", "Clicking Contact Supplier opens enquiry form", "FAIL", str(exc)[:120])
 
     # ── TC-5906 ──────────────────────────────────────────────────────────────
-    # Click Call Now div (div.vMBtn / id starts with mn_mask_pg) — opens enquiry form
+    # Click Call Now button
+    # Actual HTML: <button class="vMBtn" id="mn_mask_pg-1">Call Now</button>
     land_on_pdp_direct(page, DIRECT_PDP_URL)
     try:
-        call_cta = page.locator("div.vMBtn[id^='mn_mask_pg']").first
-        call_cta.wait_for(state="visible", timeout=8000)
-        _highlight_and_log(page, call_cta, "TC-5906 call_now div.vMBtn")
+        CALL_NOW_SELECTORS = [
+            # Primary: button with vMBtn class and id starting with mn_mask_pg (confirmed from DOM)
+            "button.vMBtn[id^='mn_mask_pg']",
+            # Fallbacks
+            "button.vMBtn",
+            "div.vMBtn[id^='mn_mask_pg']",
+            "div.vMBtn",
+            "button:has-text('Call Now')",
+            "a:has-text('Call Now')",
+            "[id^='mn_mask_pg']",
+        ]
+        call_cta = first_visible(page, CALL_NOW_SELECTORS, timeout=8000)
+        assert call_cta is not None, "Call Now element not found with any known selector"
+        _highlight_and_log(page, call_cta, "TC-5906 call_now button.vMBtn")
         call_cta.click()
         page.wait_for_timeout(1000)
 
-        # Dismiss "Open Pick an app?" popup if it appears
+        # Dismiss "Open / Pick an app?" popup if it appears (tel: link side-effect)
         try:
             cancel_btn = page.locator("button:has-text('Cancel')").last
             cancel_btn.wait_for(state="visible", timeout=3000)
