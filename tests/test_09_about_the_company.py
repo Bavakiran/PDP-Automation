@@ -35,33 +35,113 @@ _MASKED = re.compile(r"[A-Z0-9*]{2,}\*+[A-Z0-9*]+")
 # ---------------------------------------------------------------------------
 # Helper: dismiss "Unlock IndiaMART" popup
 # ---------------------------------------------------------------------------
-def _dismiss_login_popup(page: Page):
-    try:
-        skip = page.locator(
-            "a#idfpclose, a.idfpclose, a.skptxt, "
-            "text=Skip"
-        ).first
-        if skip.is_visible(timeout=5000):
-            print("  [POPUP] Login popup detected — clicking Skip")
-            skip.click(force=True)
-            page.wait_for_timeout(1000)
-            return
-    except Exception:
-        pass
+def _dismiss_login_popup(page: Page) -> bool:
+    """
+    Clicks the 'Skip' link in the IndiaMART login popup.
 
-    # Fallback: hard refresh if popup overlay is still blocking
+    Strategy (in order):
+      1. Known CSS class selectors tried one-by-one
+      2. Playwright get_by_text() — must be a separate locator call, NOT mixed
+         into a comma-separated CSS string
+      3. JavaScript DOM walk — clicks any element whose trimmed text is 'Skip'
+         directly in the browser, bypassing all Playwright visibility checks
+
+    Returns True if the Skip element was clicked, False if popup not found.
+    """
+
+    # ── 1. CSS selectors (each tried individually) ──────────────────────────
+    for sel in [
+        "a#idfpclose",
+        "a.idfpclose",
+        "a.skptxt",
+        "a[class*='skip']",
+        "span[class*='skip']",
+        "div[class*='skip']",
+        "button[class*='skip']",
+    ]:
+        try:
+            el = page.locator(sel).first
+            if el.is_visible(timeout=800):
+                print(f"  [POPUP] Dismissing via CSS '{sel}'")
+                el.click(force=True)
+                page.wait_for_timeout(700)
+                return True
+        except Exception:
+            continue
+
+    # ── 2. Playwright text locator (separate call — required for text= syntax) ─
+    for text in ["Skip", "SKIP", "skip"]:
+        try:
+            el = page.get_by_text(text, exact=True).first
+            if el.is_visible(timeout=800):
+                print(f"  [POPUP] Dismissing via get_by_text('{text}')")
+                el.click(force=True)
+                page.wait_for_timeout(700)
+                return True
+        except Exception:
+            continue
+
+    # ── 3. JavaScript DOM walk — most reliable when selectors miss ───────────
     try:
-        overlay = page.locator(
-            "div#identyfy_usr_ctl, "
-            "div[class*='iden_bg'], "
-            "div[class*='wd_box1']"
-        ).first
-        if overlay.is_visible(timeout=2000):
-            print("  [POPUP] Overlay still present — hard refreshing")
-            page.reload(wait_until="domcontentloaded", timeout=60000)
-            page.wait_for_timeout(2000)
+        clicked = page.evaluate("""
+            () => {
+                const tags = ['a', 'span', 'div', 'button', 'p', 'li'];
+                for (const tag of tags) {
+                    for (const el of document.querySelectorAll(tag)) {
+                        const t = (el.innerText || el.textContent || '').trim();
+                        if (t === 'Skip' || t === 'SKIP' || t === 'skip') {
+                            el.click();
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            }
+        """)
+        if clicked:
+            print("  [POPUP] Dismissing via JavaScript DOM walk")
+            page.wait_for_timeout(700)
+            return True
+    except Exception as js_err:
+        print(f"  [POPUP] JS fallback error: {js_err}")
+
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Helper: wait for popup overlay, then dismiss it
+# ---------------------------------------------------------------------------
+def _wait_and_dismiss_popup(page: Page, max_wait_ms: int = 4000):
+    """
+    Waits up to max_wait_ms for the IndiaMART login overlay to appear,
+    then calls _dismiss_login_popup(). Safe to call even when no popup exists.
+    """
+    OVERLAY_SEL = (
+        "div#identyfy_usr_ctl, "
+        "div[class*='iden_bg'], "
+        "div[class*='wd_box1'], "
+        "div[class*='login-popup'], "
+        "div[class*='loginpopup'], "
+        "div[class*='unlock']"
+    )
+    try:
+        overlay = page.locator(OVERLAY_SEL).first
+        overlay.wait_for(state="visible", timeout=max_wait_ms)
+        print("  [POPUP] Overlay visible — attempting to click Skip")
+        dismissed = _dismiss_login_popup(page)
+        if not dismissed:
+            print("  [POPUP] WARNING: Skip element not found even though overlay is present")
+            # Last resort: print the overlay's outer HTML so we can inspect selectors
+            try:
+                html = page.evaluate(
+                    "el => el.outerHTML.slice(0, 600)",
+                    overlay.element_handle()
+                )
+                print(f"  [POPUP] Overlay HTML snippet:\n{html}")
+            except Exception:
+                pass
     except Exception:
-        pass
+        pass   # No overlay appeared — nothing to do
 
 
 # ---------------------------------------------------------------------------
@@ -100,10 +180,8 @@ def _highlight_and_log(page: Page, locator: Locator, label: str):
 # ---------------------------------------------------------------------------
 def _scroll_to_product_details(page: Page):
     try:
-        # Dismiss popup first before scrolling
-        _dismiss_login_popup(page)
+        _wait_and_dismiss_popup(page)
 
-        # Scroll the tab nav into view
         tab_nav = page.locator("a[href*='#abt'], a[href*='#pdpDP']").first
         if tab_nav.is_visible(timeout=3000):
             tab_nav.scroll_into_view_if_needed()
@@ -111,35 +189,36 @@ def _scroll_to_product_details(page: Page):
             page.evaluate("window.scrollTo(0, document.body.scrollHeight * 0.5)")
 
         page.wait_for_timeout(1500)
-        # Dismiss popup that may appear after scroll
-        _dismiss_login_popup(page)
+        _wait_and_dismiss_popup(page, max_wait_ms=2000)
         print("  [SCROLL] Scrolled to Product Details section")
     except Exception:
         page.evaluate("window.scrollTo(0, document.body.scrollHeight * 0.5)")
         page.wait_for_timeout(1500)
-        _dismiss_login_popup(page)
+        _wait_and_dismiss_popup(page, max_wait_ms=2000)
 
 
 # ---------------------------------------------------------------------------
 # Click "Company Details" tab
 # ---------------------------------------------------------------------------
 def _click_company_details_tab(page: Page):
-    # Target the anchor specifically — not the nav container
     tab = page.locator("a[href*='#abt']").first
 
-    # Fallback: find the link whose text is exactly "Company Details"
     if not tab.is_visible(timeout=3000):
         tab = page.locator("nav a, ul.tabs a, [class*='tab'] a").filter(
             has_text="Company Details"
         ).first
 
     tab.wait_for(state="visible", timeout=8000)
+
+    # Dismiss popup RIGHT before clicking — popup can block the element
+    _wait_and_dismiss_popup(page, max_wait_ms=3000)
+    page.wait_for_timeout(500)
+
     _highlight_and_log(page, tab, "TC Company Details tab a[href*='#abt']")
     tab.click()
-    page.wait_for_timeout(3000)   # wait for content to render after tab switch
+    page.wait_for_timeout(3000)
 
-    # Dismiss popup that may appear after tab click
-    _dismiss_login_popup(page)
+    _wait_and_dismiss_popup(page, max_wait_ms=2000)
     print("  [INFO] Company Details tab clicked")
 
 
@@ -151,23 +230,17 @@ def run(page: Page) -> TestResult:
     print("\n[Suite 09] About the Company")
 
     # ── TC-5955 ──────────────────────────────────────────────────────────────
-    # Scroll to Product Details → click Company Details tab → text present
     land_on_pdp_direct(page, DIRECT_PDP_URL)
-    _dismiss_login_popup(page)
+    _wait_and_dismiss_popup(page)
     try:
         _scroll_to_product_details(page)
-        _dismiss_login_popup(page)
         _click_company_details_tab(page)
-
-        # Wait for company details content to fully render after tab click
         page.wait_for_timeout(2000)
 
-        # The data is in the container wrapping "About the Company" heading + fields
-        # Try multiple parent containers that hold the actual field data
         about_section = None
         for sel in [
             "div.tab-content #abt",
-            "#abt ~ div",                          # sibling after #abt anchor
+            "#abt ~ div",
             "div:has(> h2:has-text('About the Company'))",
             "section:has(h2:has-text('About the Company'))",
             "[class*='about-company']",
@@ -187,16 +260,10 @@ def run(page: Page) -> TestResult:
             except Exception:
                 continue
 
-        # Final fallback: extract only the About the Company block from body
         if about_section is None:
             body_text = page.locator("body").inner_text()
-            # Find the LAST occurrence — "About the Company" heading in the section
-            # (earlier occurrences may be in "More Products" or other widgets)
             idx = body_text.rfind("About the Company")
-            if idx != -1:
-                text = body_text[idx:idx + 600].strip()
-            else:
-                text = ""
+            text = body_text[idx:idx + 600].strip() if idx != -1 else ""
         else:
             text = about_section.inner_text().strip()
 
@@ -211,18 +278,13 @@ def run(page: Page) -> TestResult:
         tr.add("TC-5955", "About the Company section text is present", "FAIL", str(exc)[:120])
 
     # ── TC-5956 ──────────────────────────────────────────────────────────────
-    # Under Company Details — verify masking and date formats
     land_on_pdp_direct(page, DIRECT_PDP_URL)
-    _dismiss_login_popup(page)
+    _wait_and_dismiss_popup(page)
     try:
         _scroll_to_product_details(page)
-        _dismiss_login_popup(page)
         _click_company_details_tab(page)
-
-        # Wait for content to render after tab click
         page.wait_for_timeout(2000)
 
-        # Find the container that actually holds the company fields
         section_text = ""
         for sel in [
             "div.tab-content #abt",
@@ -246,7 +308,6 @@ def run(page: Page) -> TestResult:
             except Exception:
                 continue
 
-        # Final fallback: use rfind to get the actual section, not earlier widgets
         if not section_text:
             body_text = page.locator("body").inner_text()
             idx = body_text.rfind("About the Company")
@@ -262,7 +323,6 @@ def run(page: Page) -> TestResult:
 
         # ── GST masked ───────────────────────────────────────────────────────
         if "GST" in section_text and "GST Registration" not in section_text.split("GST")[0]:
-            # Extract the GST value line
             gst_lines = [
                 line.strip() for line in section_text.splitlines()
                 if line.strip() and not any(k in line for k in
@@ -281,10 +341,7 @@ def run(page: Page) -> TestResult:
 
         # ── IEC code masked ──────────────────────────────────────────────────
         if "Import Export Code" in section_text or "IEC" in section_text:
-            # Find line after IEC label
-            iec_match = re.search(
-                r"Import Export Code.*?\n(.+)", section_text
-            )
+            iec_match = re.search(r"Import Export Code.*?\n(.+)", section_text)
             iec_value = iec_match.group(1).strip() if iec_match else ""
             if iec_value and _MASKED.search(iec_value):
                 results.append(f"IEC masked ✓ ({iec_value})")
@@ -322,7 +379,7 @@ def run(page: Page) -> TestResult:
         else:
             results.append("Member Since — not found (optional)")
 
-        # ── Optional fields (just log presence) ─────────────────────────────
+        # ── Optional fields ──────────────────────────────────────────────────
         for field in ["Legal Status", "Nature of Business",
                       "Number of Employees", "Annual Turnover", "Exports to"]:
             if field in section_text:
