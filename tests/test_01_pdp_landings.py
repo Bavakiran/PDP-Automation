@@ -22,25 +22,42 @@ SEARCH_URL = "https://dir.indiamart.com"
 
 
 # -----------------------------------------------------------
-# Shared: reload if popup/overlay detected
+# Shared: dismiss popup by clicking Skip, fallback hard-refresh
+# Handles both:
+#   "Login to connect with suppliers" (dir.indiamart.com popup)
+#   "Unlock the best of IndiaMART"   (www.indiamart.com popup)
 # -----------------------------------------------------------
 def _hard_refresh_if_popup(page: Page):
-    """
-    Detects IndiaMart's login popup ('Looking for New Suppliers?')
-    as well as generic overlay/modal patterns, then hard-refreshes.
-    """
     try:
-        popup = page.locator(
-            # IndiaMart-specific login popup (most reliable)
+        # First try: click Skip (preferred — keeps page state)
+        skip = page.locator(
+            "a#idfpclose, "
+            "a.idfpclose, "
+            "a.skptxt, "
+            "a:has-text('Skip'), "
+            "span:has-text('Skip')"
+        ).first
+        if skip.is_visible(timeout=3000):
+            print("  [POPUP] Clicking Skip to dismiss popup")
+            skip.click(force=True)
+            page.wait_for_timeout(1000)
+            return
+    except Exception:
+        pass
+
+    # Second try: hard refresh if overlay still blocking
+    try:
+        overlay = page.locator(
+            "div:has-text('Login to connect with suppliers'), "
             "div:has-text('Looking for New Suppliers?'), "
-            "div:has-text('Login to connect with verified suppliers'), "
-            # Generic fallbacks
+            "div:has-text('Unlock the best of IndiaMART'), "
             "div[class*='popup'], div[class*='modal'], "
             "div[class*='overlay'], div[id*='popup'], "
-            "div[id*='modal'], div[class*='dialog']"
-        )
-        if popup.first.is_visible(timeout=2000):
-            print("  ↻ Popup detected — refreshing page...")
+            "div[id*='modal'], div[class*='dialog'], "
+            "div#identyfy_usr_ctl, div[class*='iden_bg']"
+        ).first
+        if overlay.is_visible(timeout=2000):
+            print("  [POPUP] Skip not found — hard refreshing page")
             page.reload(wait_until="domcontentloaded", timeout=60000)
             page.wait_for_timeout(2000)
     except Exception:
@@ -162,7 +179,7 @@ def _tc5547_company_page_to_pdp(page: Page, tr: TestResult):
     """
     dir.indiamart.com → search "Digital marketing services" → Enter
     → click first company name (data-click="^CompanyName", opens new tab)
-    → click any product image (img[id^='chngImg'])
+    → scroll down → click any product image (img[id^='chngImg'])
     → click product name (a[id^='title-']) → PDP
     """
     try:
@@ -181,12 +198,16 @@ def _tc5547_company_page_to_pdp(page: Page, tr: TestResult):
         assert "indiamart.com" in company_page.url, \
             f"Company page did not load: {company_page.url}"
 
-        product_image = company_page.locator("img[id^='chngImg']").first
-        product_image.wait_for(state="visible", timeout=10000)
-        product_image.click()
+        # Step 1: click first product name in the slider/listing
+        # e.g. <a class="slider-product-name">Digital Marketing Services...</a>
+        slider_name = company_page.locator("a.slider-product-name").first
+        slider_name.wait_for(state="visible", timeout=10000)
+        slider_name.click()
         company_page.wait_for_timeout(1500)
         _hard_refresh_if_popup(company_page)
 
+        # Step 2: click the product title link to open PDP in new tab
+        # e.g. <a class="FM_c1 FM_Lsp1 Fm_lh5 FM_c12 FM_cp" id="title-3">...</a>
         with company_page.context.expect_page() as new_pg:
             company_page.locator("a[id^='title-']").first.click()
 
@@ -215,14 +236,13 @@ def _tc5547_company_page_to_pdp(page: Page, tr: TestResult):
 def _tc5989_homepage_to_pdp(page: Page, tr: TestResult):
     """
     dir.indiamart.com → search "Digital marketing services" → Enter
-    → click first product name on SERP (seeds recently viewed)
-    → close PDP tab → check & dismiss popup → click IndiaMART logo on SERP
-    → click recently viewed product name on homepage → PDP
+    → click 6th product on SERP (seeds recently viewed)
+    → dismiss popup → click IndiaMART logo → recently viewed → PDP
     """
     try:
         _search_and_enter(page, "Digital marketing services near benguluru")
 
-        # Step 1: click 6th product name on SERP to seed recently viewed
+        # Step 1: click 6th product to seed recently viewed
         sixth_product = page.locator("a.cardlinks[href*='proddetail']").nth(5)
         sixth_product.wait_for(state="visible", timeout=15000)
         with page.context.expect_page() as seed_pg:
@@ -232,12 +252,10 @@ def _tc5989_homepage_to_pdp(page: Page, tr: TestResult):
         seed_page.wait_for_timeout(1500)
         seed_page.close()
 
-        # ── FIX: dismiss popup BEFORE attempting logo click ──────────────
         page.wait_for_timeout(1000)
         _hard_refresh_if_popup(page)
-        # ─────────────────────────────────────────────────────────────────
 
-        # Step 2: click IndiaMART logo on SERP → homepage
+        # Step 2: click IndiaMART logo → homepage
         logo = page.locator(
             "a.hd_logo, "
             "a[class*='hd_logo'], "
