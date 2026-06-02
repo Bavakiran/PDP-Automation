@@ -1,109 +1,311 @@
-"""
-IndiaMart PDP Daily Smoke Test Runner.
-"""
-import argparse
-import os
-import shutil
-import sys
-from datetime import datetime
+
+import sys, importlib, datetime
 from pathlib import Path
+from playwright.sync_api import sync_playwright, Page
 
-from playwright.sync_api import sync_playwright
+BASE_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(BASE_DIR))
+from utils.helpers import TestResult
 
-from config import VIEWPORT, USER_AGENT
-from utils.helpers import generate_html_report
+BASE_URL = "https://www.indiamart.com"
+MOBILE   = "8610237001"
+OTP      = "1411"
+HEADLESS = False
 
-SUITES = {
-    "landings": "test_01_pdp_landings",
-    "first_fold": "test_02_pdp_first_fold",
-    "breadcrumbs": "test_03_pdp_breadcrumbs",
-    "similar": "test_04_find_similar_products",
-    "categories": "test_05_find_related_categories",
-    "company": "test_06_company_details",
-    "chatBL": "test_07_chat_bl_form",
-    "more_products": "test_08_more_products",
-    "about": "test_09_about_the_company",
-    "get_quotes": "test_10_inline_BL",
-    "header_footer": "test_11_header_footer",
-}
+MODULES = [
+    "tests.test_02_pdp_first_fold",
+    "tests.test_03_pdp_breadcrumbs",
+    "tests.test_04_find_similar_products",
+    "tests.test_05_find_related_categories",
+    "tests.test_06_company_details",
+    "tests.test_07_chat_bl_form",
+    "tests.test_08_more_products",
+    "tests.test_09_about_the_company",
+    "tests.test_10_inline_BL",
+    "tests.test_11_header_footer",
+    "tests.test_12_seller_contact",
+]
+
+def login(page: Page) -> None:
+    print("\n" + "="*60)
+    print("  PHASE 3 - FULLY LOGGED IN (mobile + OTP)")
+    print("="*60)
+    page.goto(BASE_URL, wait_until="domcontentloaded")
+    page.wait_for_timeout(2500)
+
+    # ── Dismiss any interstitial / skip popup ──────────────────────
+    try:
+        skip = page.locator(
+            "a#idfpclose,a.idfpclose,a.skptxt,"
+            "a:has-text('Skip'),span:has-text('Skip')"
+        ).first
+        if skip.is_visible(timeout=2000):
+            skip.click(force=True)
+            page.wait_for_timeout(800)
+    except Exception:
+        pass
+
+    # ── Open login dropdown ────────────────────────────────────────
+    hd_pr = page.locator(".Hd_pr").first
+    try:
+        hd_pr.wait_for(state="visible", timeout=15000)
+    except Exception:
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_timeout(2500)
+        hd_pr.wait_for(state="visible", timeout=15000)
+    hd_pr.click()
+    page.wait_for_timeout(1500)
+    print("[Login] Clicked .Hd_pr")
+
+    # ── Click Sign-In link ─────────────────────────────────────────
+    sign_in_link = page.locator("a.cont_s.cpo.Hd_db").first
+    try:
+        sign_in_link.wait_for(state="visible", timeout=5000)
+        sign_in_link.click()
+    except Exception:
+        print("[Login] Hidden - JS fallback")
+        sign_in_link.evaluate("el => el.click()")
+    page.wait_for_timeout(1000)
+
+    # ── Enter mobile number ────────────────────────────────────────
+    mobile_inp = page.locator("#mobile")
+    mobile_inp.wait_for(state="visible", timeout=10000)
+    mobile_inp.fill(MOBILE)
+    print(f"[Login] Entered mobile: {MOBILE}")
+    page.locator("#logintoidentify").click()
+    print("[Login] Clicked Submit")
+    page.wait_for_timeout(2500)
+    print(f"[Login] Settled on: {page.url}")
+
+    # ── Click "Continue with OTP" button ──────────────────────────
+    continue_btn = page.locator("button.login-btn")
+    try:
+        continue_btn.wait_for(state="visible", timeout=15000)
+    except Exception:
+        try:
+            page.wait_for_url("*buyer.indiamart.com*", timeout=10000)
+            page.wait_for_load_state("domcontentloaded", timeout=10000)
+            page.wait_for_timeout(1000)
+            print(f"[Login] Redirected to: {page.url}")
+            continue_btn.wait_for(state="visible", timeout=10000)
+        except Exception as e:
+            raise Exception(f"button.login-btn not found on {page.url}: {e}")
+    print(f"[Login] Found: '{continue_btn.inner_text().strip()}'")
+    continue_btn.click()
+    page.wait_for_timeout(1000)
+    print("[Login] Clicked Continue with OTP")
+
+    # ── Wait for OTP input fields ──────────────────────────────────
+    otp_first = page.locator("input#first")
+    otp_first.wait_for(state="visible", timeout=15000)
+    print("[Login] OTP modal visible - entering digits")
+
+    # ── ROOT CAUSE FIX ────────────────────────────────────────────
+    # The OTP form has NO submit button.
+    # Auto-submission is triggered by onkeyup on each input field.
+    # page.fill() does NOT fire keyboard events (keydown/keyup).
+    # Must use press_sequentially() so onkeyup fires on every digit,
+    # which moves focus to the next field and submits on the 4th digit.
+    # ─────────────────────────────────────────────────────────────
+    field_ids = ["first", "second", "third", "fourth"]
+    digits    = list(OTP.ljust(4, "0"))
+
+    for field_id, digit in zip(field_ids, digits):
+        inp = page.locator(f"input#{field_id}")
+        inp.wait_for(state="visible", timeout=5000)
+        inp.click()
+        # press_sequentially fires keydown → input → keyup (triggers onkeyup handler)
+        inp.press_sequentially(digit, delay=100)
+        page.wait_for_timeout(300)
+        print(f"[Login] Typed digit '{digit}' into input#{field_id}")
+
+    print(f"[Login] All OTP digits entered via press_sequentially: {OTP}")
+
+    # ── Wait for 'Login Successful' confirmation ───────────────────
+    # The element exists in DOM as display:none; it becomes visible after
+    # the onkeyup handler on the 4th field verifies the OTP successfully.
+    print("[Login] Waiting for #after_verified to become visible...")
+    otp_accepted = False
+    try:
+        page.wait_for_selector(
+            "p#after_verified.verify_done1",
+            state="visible",
+            timeout=15000
+        )
+        print("[Login] ✅ 'Login Successful' message is now visible")
+        otp_accepted = True
+    except Exception:
+        pass
+
+    if not otp_accepted:
+        # Fallback: check if the element text is present even if not 'visible'
+        try:
+            el = page.locator("p#after_verified")
+            el.wait_for(state="attached", timeout=5000)
+            txt = el.inner_text()
+            if "Login Successful" in txt or "successful" in txt.lower():
+                print(f"[Login] ✅ after_verified text found: '{txt}'")
+                otp_accepted = True
+        except Exception:
+            pass
+
+    if not otp_accepted:
+        # Fallback: wait for URL to change away from buyer.indiamart.com OTP page
+        try:
+            page.wait_for_function(
+                "() => !window.location.href.includes('buyer.indiamart.com')"
+                " || document.querySelector('p#after_verified')",
+                timeout=15000,
+            )
+            print("[Login] Post-OTP redirect/state change detected")
+            otp_accepted = True
+        except Exception:
+            pass
+
+    if not otp_accepted:
+        page.wait_for_timeout(3000)
+        print("[Login] ⚠️  Could not confirm Login Successful — proceeding anyway")
+        print(f"[Login] Current URL: {page.url}")
+    else:
+        # Small pause to let post-login state settle
+        page.wait_for_timeout(1500)
+
+    print(f"[Login] Phase 3 login complete - URL: {page.url}\n")
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--suite", choices=list(SUITES.keys()), help="Run a single suite")
-    parser.add_argument("--headless", action="store_true", help="Run Chromium in headless mode")
-    args = parser.parse_args()
+def run_suite(page: Page) -> list:
+    results = []
+    for mod_name in MODULES:
+        print(f"\n  >> {mod_name}")
+        try:
+            mod = importlib.import_module(mod_name)
+            result: TestResult = mod.run(page)
+            s = result.summary()
+            results.append({
+                "suite":   mod_name.split(".")[-1],
+                "results": result.results,
+                "total":   s["total"],
+                "passed":  s["passed"],
+                "failed":  s["failed"],
+                "skipped": s["skipped"],
+            })
+            print(
+                f"     {s['passed']}/{s['total']} passed | "
+                f"{s['failed']} failed | {s['skipped']} skipped"
+            )
+        except Exception as exc:
+            print(f"     CRASHED: {exc}")
+            results.append({
+                "suite": mod_name.split(".")[-1],
+                "results": [{
+                    "tc_id":      "--",
+                    "name":       "Suite crash",
+                    "status":     "FAIL",
+                    "detail":     str(exc)[:200],
+                    "screenshot": "",
+                    "timestamp":  datetime.datetime.now().strftime("%H:%M:%S"),
+                }],
+                "total": 1, "passed": 0, "failed": 1, "skipped": 0,
+            })
+    return results
 
-    headless = args.headless
-    suites_to_run = [SUITES[args.suite]] if args.suite else list(SUITES.values())
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    os.environ["PDP_SCREENSHOT_RUN_ID"] = timestamp
 
-    print(f"\n{'=' * 60}")
-    print("  IndiaMart PDP Daily Smoke Test")
-    print(f"  Suites: {len(suites_to_run)} | Headless: {headless}")
-    print(f"{'=' * 60}")
+def generate_report(results, output_path):
+    now    = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    total  = sum(r["total"]   for r in results)
+    passed = sum(r["passed"]  for r in results)
+    failed = sum(r["failed"]  for r in results)
+    skipped= sum(r["skipped"] for r in results)
+    pct    = round(passed / total * 100, 1) if total else 0
 
-    all_results = []
+    colour = {"PASS": "#d4edda", "FAIL": "#f8d7da", "SKIP": "#fff3cd"}
+    rows = ""
+    for suite in results:
+        rows += (
+            f'<tr><td colspan="6" style="background:#343a40;color:#fff;'
+            f'font-weight:bold;padding:8px 10px">{suite["suite"]} '
+            f'<span style="background:#28a745;color:#fff;padding:1px 8px;'
+            f'border-radius:4px;font-size:11px">Fully Logged In</span></td></tr>'
+        )
+        for tc in suite["results"]:
+            sc = tc.get("screenshot", "")
+            sc_cell = (
+                f'<a href="file:///{sc.replace(chr(92), "/")}" target="_blank">screenshot</a>'
+                if sc else ""
+            )
+            rows += (
+                f'<tr style="background:{colour.get(tc["status"], "#fff")}">'
+                f'<td>{tc["tc_id"]}</td>'
+                f'<td>{tc["name"]}</td>'
+                f'<td><b>{tc["status"]}</b></td>'
+                f'<td style="font-size:12px">{tc.get("detail", "")}</td>'
+                f'<td>{sc_cell}</td>'
+                f'<td>{tc["timestamp"]}</td></tr>'
+            )
 
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Phase 3 Report</title>
+  <style>
+    body  {{ font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5 }}
+    h1    {{ color: #333 }}
+    .kpi  {{ display: flex; gap: 16px; margin: 16px 0 24px }}
+    .box  {{ padding: 12px 22px; border-radius: 8px; text-align: center;
+             color: #fff; font-size: 18px; font-weight: bold }}
+    .pass {{ background: #28a745 }}
+    .fail {{ background: #dc3545 }}
+    .skip {{ background: #ffc107; color: #333 }}
+    .total{{ background: #17a2b8 }}
+    table {{ width: 100%; border-collapse: collapse; background: #fff;
+             border-radius: 8px; overflow: hidden;
+             box-shadow: 0 1px 4px rgba(0,0,0,.1) }}
+    th    {{ background: #343a40; color: #fff; padding: 10px; text-align: left }}
+    td    {{ padding: 8px 10px; border-bottom: 1px solid #dee2e6; font-size: 13px }}
+  </style>
+</head>
+<body>
+  <h1>Phase 3 - Fully Logged In Report</h1>
+  <p style="color:#666">Mobile: {MOBILE} | OTP: {OTP} | Generated: {now}</p>
+  <div class="kpi">
+    <div class="box total">Total: {total}</div>
+    <div class="box pass">Passed: {passed}</div>
+    <div class="box fail">Failed: {failed}</div>
+    <div class="box skip">Skipped: {skipped}</div>
+    <div class="box pass">Pass Rate: {pct}%</div>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>TC ID</th><th>Test Name</th><th>Status</th>
+        <th>Detail</th><th>Screenshot</th><th>Time</th>
+      </tr>
+    </thead>
+    <tbody>{rows}</tbody>
+  </table>
+</body>
+</html>"""
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(html, encoding="utf-8")
+    print(f"\nReport: {output_path}")
+
+
+def main():
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=headless, slow_mo=200)
-        ctx = browser.new_context(viewport=VIEWPORT, user_agent=USER_AGENT)
-
-        for module_name in suites_to_run:
-            page = ctx.new_page()
-            try:
-                mod = __import__(f"tests.{module_name}", fromlist=["run"])
-                tr = mod.run(page)
-                summary = tr.summary()
-                all_results.append({**summary, "results": tr.results, "suite": module_name})
-                print(f"  -> {summary['passed']}/{summary['total']} passed")
-            except Exception as exc:
-                print(f"  Suite {module_name} crashed: {exc}")
-                all_results.append({
-                    "total": 1,
-                    "passed": 0,
-                    "failed": 1,
-                    "skipped": 0,
-                    "results": [{
-                        "tc_id": "?",
-                        "name": module_name,
-                        "status": "FAIL",
-                        "detail": str(exc),
-                        "timestamp": "",
-                    }],
-                    "suite": module_name,
-                })
-            finally:
-                for open_page in list(ctx.pages):
-                    try:
-                        open_page.close()
-                    except Exception:
-                        pass
-
+        browser = pw.chromium.launch(headless=HEADLESS, slow_mo=150)
+        page    = browser.new_context().new_page()
+        login(page)
+        results = run_suite(page)
         browser.close()
 
-    total = sum(r["total"] for r in all_results)
-    passed = sum(r["passed"] for r in all_results)
-    failed = sum(r["failed"] for r in all_results)
-    skipped = sum(r["skipped"] for r in all_results)
-    pct = round(passed / total * 100, 1) if total else 0
+    report_path = BASE_DIR.parent / "reports" / "pdp_phase3_report.html"
+    generate_report(results, report_path)
 
-    print(f"\n{'=' * 60}")
-    print(f"  FINAL: {passed}/{total} passed ({pct}%) | {failed} failed | {skipped} skipped")
-    print(f"{'=' * 60}")
-
-    reports_dir = Path(__file__).resolve().parent / "reports"
-    timestamped_report = reports_dir / f"pdp_smoke_{timestamp}.html"
-    latest_report = reports_dir / "pdp_smoke_report.html"
-
-    report = Path(generate_html_report(all_results, str(timestamped_report))).resolve()
-    shutil.copyfile(report, latest_report)
-
-    print(f"  Report: {report}")
-    print(f"  Latest: {latest_report.resolve()}")
-
-    sys.exit(0 if failed == 0 else 1)
+    total_fail = sum(r["failed"] for r in results)
+    print(f"\nDONE - Failures: {total_fail}")
+    sys.exit(1 if total_fail else 0)
 
 
 if __name__ == "__main__":

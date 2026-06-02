@@ -19,3 +19,13 @@ USER_AGENT = (
 )
 
 TIMEOUT = 30_000
+
+# ── Regression login credentials ──────────────────────────────────────────────
+MOBILE_NUMBER = "9500144262"    # Phase 2 — identified (no OTP)
+OTP           = ""              # Phase 2 — leave blank
+HEADLESS      = False
+
+# ── LLM Gateway (AI Visual Checker) ───────────────────────────────────────────
+LLM_BASE_URL = "https://imllm.intermesh.net"
+LLM_API_KEY  = "sk-6FNmFgd7M7hDn6IggecNjA"  
+LLM_MODEL    = "google/gemini-2.5-flash-lite"      # vision-capable, low token cost

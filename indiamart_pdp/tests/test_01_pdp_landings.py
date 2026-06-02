@@ -60,14 +60,13 @@ def _search_and_enter(page: Page, keyword: str):
 
     search_box = page.locator("input[name='ss']")
     search_box.wait_for(state="visible", timeout=15000)
-    search_box.click(force=True)          # force=True bypasses any residual overlay
+    search_box.click(force=True)
     search_box.fill(keyword)
     page.wait_for_timeout(500)
     search_box.press("Enter")
     page.wait_for_load_state("domcontentloaded", timeout=60000)
     page.wait_for_timeout(2000)
     _hard_refresh_if_popup(page)
-
 
 
 # ── TC-5543 ───────────────────────────────────────────────────────────────────
@@ -144,55 +143,57 @@ def _tc5546_mcat_to_pdp(page: Page, tr: TestResult):
 # ── TC-5547 ───────────────────────────────────────────────────────────────────
 def _tc5547_company_page_to_pdp(page: Page, tr: TestResult):
     """
-    SERP → click company name → company page (products visible in top carousel)
-    → click first carousel product name (p[id^='chngName_']) to select it
-    → click its PDP title link (a[id^='title-']) → PDP
-
-    DOM confirmed (no scroll needed — carousel is at top of company page):
-      Carousel label : <p id="chngName_7" class="fasC FM_w1" onclick="...">Product Name</p>
-      PDP title link : <a id="title-0" class="FM_c1 FM_Lsp1 FM_c12 FM_cp"
-                          href="…/proddetail/…">Product Name</a>
+    SERP → click company name → company page
+    → scroll down → click 'View Details'
+    → click product name link (target="_blank") → PDP
     """
     try:
         _search_and_enter(page, "digital printing services")
 
+        # Open company page in new tab
         company_link = page.locator("a[data-click='^CompanyName']").first
         company_link.wait_for(state="visible", timeout=15000)
         with page.context.expect_page() as company_pg:
             company_link.click()
 
         company_page = company_pg.value
-        company_page.wait_for_load_state("networkidle", timeout=60000)
-        company_page.wait_for_timeout(1500)
+        company_page.wait_for_load_state("domcontentloaded", timeout=60000)
+        company_page.wait_for_timeout(2000)
         _hard_refresh_if_popup(company_page)
 
         assert "indiamart.com" in company_page.url, \
             f"Company page did not load: {company_page.url}"
+        print(f"  [TC-5547] Company page: {company_page.url}")
 
-        # Step 1: click first carousel product name to activate it
-        # <p id="chngName_0" class="fasC FM_w1">PP Sunpack Sheet Printing Service</p>
-        carousel_name = company_page.locator(
-            "p[id^='chngName_'].fasC, "
-            "p[id^='chngName_'].FM_w1, "
-            "p[id^='chngName_']"
-        ).first
-        carousel_name.wait_for(state="visible", timeout=15000)
-        label = carousel_name.inner_text().strip()[:60]
-        print(f"  [TC-5547] Carousel product: '{label}'")
-        carousel_name.click()
-        company_page.wait_for_timeout(800)
+        # Step 1 — scroll down to reveal product listings
+        company_page.evaluate("window.scrollBy(0, 600)")
+        company_page.wait_for_timeout(1500)
 
-        # Step 2: click the PDP title link (a[id^='title-']) — opens PDP in new tab
-        # <a id="title-0" class="FM_c1 FM_Lsp1 ..." href="…/proddetail/…">
-        pdp_link = company_page.locator(
-            "a[id^='title-'][href*='proddetail'], "
-            "a.FM_c1.FM_Lsp1[href*='proddetail'], "
-            "a.FM_c1[href*='proddetail']"
+        # Step 2 — click first "View Details" button
+        view_details = company_page.locator(
+            "span.viewall-text:has-text('View Details')"
         ).first
-        pdp_link.wait_for(state="visible", timeout=10000)
+        view_details.wait_for(state="visible", timeout=10000)
+        view_details.scroll_into_view_if_needed()
+        company_page.wait_for_timeout(500)
+        view_details.click()
+        company_page.wait_for_timeout(2000)
+        print(f"  [CLICK] [TC-5547 view_details] Clicked 'View Details'")
+
+        # Step 3 — click the product name link (opens PDP in new tab)
+        # <a href="//www.indiamart.com/proddetail/..." target="_blank">Product Name</a>
+        product_link = company_page.locator(
+            "a[href*='indiamart.com/proddetail/'][target='_blank'], "
+            "a[href*='/proddetail/'][target='_blank'], "
+            "a[href*='proddetail/']"
+        ).first
+        product_link.wait_for(state="visible", timeout=10000)
+        product_name = product_link.inner_text().strip()[:60]
+        product_href = product_link.get_attribute("href") or ""
+        print(f"  [CLICK] [TC-5547 product_name] <a> '{product_name}' → {product_href[:60]}")
 
         with company_page.context.expect_page() as new_pg:
-            pdp_link.click()
+            product_link.click()
 
         pdp = new_pg.value
         pdp.wait_for_load_state("domcontentloaded", timeout=60000)
@@ -205,11 +206,13 @@ def _tc5547_company_page_to_pdp(page: Page, tr: TestResult):
         assert title_h1.is_visible(timeout=8000), "Product h1 not visible"
         tr.add("TC-5547", "Company Page to PDP landing", "PASS",
                f"Product: '{title_h1.inner_text()[:50]}'")
+        print(f"  [PASS] [TC-5547] Company Page to PDP landing - PASS: {pdp.url.split('indiamart.com')[-1][:60]}")
         pdp.close()
         company_page.close()
 
     except Exception as exc:
-        tr.add("TC-5547", "Company Page to PDP landing", "FAIL", str(exc)[:150])
+        tr.add("TC-5547", "Company Page to PDP landing", "FAIL", str(exc)[:200])
+        print(f"  [FAIL] [TC-5547] Company Page to PDP landing - FAIL: {exc}")
 
 
 # ── TC-5989 ───────────────────────────────────────────────────────────────────
@@ -221,7 +224,6 @@ def _tc5989_homepage_to_pdp(page: Page, tr: TestResult):
     try:
         _search_and_enter(page, "digital printing services")
 
-        # Seed recently viewed — click 6th product card
         sixth = page.locator("a.cardlinks[href*='proddetail']").nth(5)
         sixth.wait_for(state="visible", timeout=15000)
         with page.context.expect_page() as seed_pg:
@@ -234,7 +236,6 @@ def _tc5989_homepage_to_pdp(page: Page, tr: TestResult):
         page.wait_for_timeout(1000)
         _hard_refresh_if_popup(page)
 
-        # Click IndiaMART logo → homepage
         logo = page.locator(
             "a.hd_logo, a[class*='hd_logo'], a[href='https://www.indiamart.com/']"
         ).first
@@ -247,7 +248,6 @@ def _tc5989_homepage_to_pdp(page: Page, tr: TestResult):
         assert "indiamart.com" in page.url and "proddetail" not in page.url, \
             f"Did not land on homepage: {page.url}"
 
-        # Click first recently viewed product link
         recently_viewed = page.locator(
             "a.pernm[href*='proddetail'], "
             "a[class*='pernm'][href*='proddetail'], "
